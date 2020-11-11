@@ -7,6 +7,7 @@ import torch
 import torchvision
 import torch.nn as nn
 import numpy as np
+import torch.nn.functional as nnf
 
 
 # Device configuration
@@ -23,11 +24,11 @@ def load_image(image_path, transform=None, max_size=None, shape=None):
     
     if shape:
         image = image.resize(shape, Image.LANCZOS)
-    
+    weight_image = (np.array(image) < 125).astype(np.float32)
     if transform:
         image = transform(image).unsqueeze(0)
     
-    return image.to(device)
+    return image.to(device), weight_image[: ,:, 1]
 
 
 class VGGNet(nn.Module):
@@ -59,8 +60,8 @@ def main(config):
     
     # Load content and style images
     # Make the style image same size as the content image
-    content = load_image(config.content, transform, max_size=config.max_size)
-    style = load_image(config.style, transform, shape=[content.size(2), content.size(3)])
+    content, weight = load_image(config.content, transform, max_size=config.max_size)
+    style,_ = load_image(config.style, transform, shape=[content.size(2), content.size(3)])
     
     # Initialize a target image with the content image
     target = content.clone().requires_grad_(True)
@@ -83,15 +84,17 @@ def main(config):
 
             # Reshape convolutional feature maps
             _, c, h, w = f1.size()
-            f1 = f1.view(c, h * w)
-            f3 = f3.view(c, h * w)
+            weight_ = np.resize(weight, new_shape=(h, w))
+            weight_ = torch.tensor(weight_).to(device).view(1, h*w)
+            f1 = f1.view(c, h * w)*weight_
+            f3 = f3.view(c, h * w)*weight_
 
             # Compute gram matrix
             f1 = torch.mm(f1, f1.t())
             f3 = torch.mm(f3, f3.t())
 
             # Compute style loss with target and style images
-            style_loss += torch.mean((f1 - f3)**2) / (c * h * w) 
+            style_loss += torch.mean((f1 - f3)**2) / (c * h * w)
         
         # Compute total loss, backprop and optimize
         loss = content_loss + config.style_weight * style_loss 
@@ -113,10 +116,10 @@ def main(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--content', type=str, default='png/content.png')
-    parser.add_argument('--style', type=str, default='png/style.png')
+    parser.add_argument('--content', type=str, default='png/content-yong-new.png')
+    parser.add_argument('--style', type=str, default='png/timg.jpg')
     parser.add_argument('--max_size', type=int, default=400)
-    parser.add_argument('--total_step', type=int, default=2000)
+    parser.add_argument('--total_step', type=int, default=200000)
     parser.add_argument('--log_step', type=int, default=10)
     parser.add_argument('--sample_step', type=int, default=500)
     parser.add_argument('--style_weight', type=float, default=100)
